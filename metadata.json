@@ -1,0 +1,6 @@
+{
+  "name": "Pagbilao PFRF Form",
+  "description": "An exact digital reproduction of the Pagbilao PNP Footage Request Form (PFRF) as a web-based online form.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

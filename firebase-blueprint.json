@@ -1,0 +1,85 @@
+{
+  "entities": {
+    "User": {
+      "title": "User Profile",
+      "description": "User account information and role-based access",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "displayName": { "type": "string" },
+        "role": { 
+          "type": "string",
+          "enum": ["requester", "operator", "admin"]
+        },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "role"]
+    },
+    "CCTVRequest": {
+      "title": "CCTV Footage Request",
+      "description": "A formal request for CCTV footage extraction",
+      "type": "object",
+      "properties": {
+        "requesterUid": { "type": "string" },
+        "requesterName": { "type": "string" },
+        "date": { "type": "string" },
+        "designation": { "type": "string" },
+        "requestNo": { "type": "string" },
+        "playbackReason": { "type": "string" },
+        "incidentDate": { "type": "string" },
+        "incidentTime": { "type": "string" },
+        "location": { "type": "string" },
+        "landmark": { "type": "string" },
+        "vehiclesInvolved": { "type": "string" },
+        "incidentDescription": { "type": "string" },
+        "status": {
+          "type": "string",
+          "enum": ["pending", "reviewing", "seeking_approval", "approved", "denied", "processing", "closed"]
+        },
+        "attachments": {
+          "type": "array",
+          "items": { "type": "object" }
+        },
+        "operatorRemarks": { "type": "string" },
+        "attendedBy": { "type": "string" },
+        "attendedDate": { "type": "string" },
+        "supervisorName": { "type": "string" },
+        "supervisorDate": { "type": "string" },
+        "approvedBy": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["requesterName", "playbackReason", "status", "createdAt"]
+    },
+    "WorkflowLog": {
+      "title": "Workflow Activity Log",
+      "description": "Granular logs of actions taken on a request for handover and transparency",
+      "type": "object",
+      "properties": {
+        "requestId": { "type": "string" },
+        "operatorUid": { "type": "string" },
+        "operatorName": { "type": "string" },
+        "attendedBy": { "type": "string" },
+        "action": { "type": "string" },
+        "note": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["requestId", "operatorUid", "action", "timestamp"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profiles and roles"
+    },
+    "/requests/{requestId}": {
+      "schema": "CCTVRequest",
+      "description": "CCTV footage requests"
+    },
+    "/requests/{requestId}/logs/{logId}": {
+      "schema": "WorkflowLog",
+      "description": "Progressive updates and handover notes for a specific request"
+    }
+  }
+}
