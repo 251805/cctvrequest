@@ -4,6 +4,9 @@
  */
 
 import React, { useState, useEffect } from 'react';
+import Docxtemplater from 'docxtemplater';
+import PizZip from 'pizzip';
+import { saveAs } from 'file-saver';
 import { doc, updateDoc, deleteDoc, collection, addDoc, serverTimestamp, onSnapshot, query, orderBy } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { useAuth } from '../contexts/AuthContext';
@@ -256,22 +259,88 @@ export default function RequestDetails({ request, onClose }: { request: any, onC
     try {
       const requestRef = doc(db, 'requests', request.id);
 
+      let softDeleteSuccess = false;
       // If unauthenticated staff session (Dojie credentials), soft update first to grant delete access
       if (staffPassphrase) {
         await updateDoc(requestRef, {
           isDeleted: true,
           staffCode: staffPassphrase
         });
+        softDeleteSuccess = true;
       }
 
-      await deleteDoc(requestRef);
-      alert("Request has been deleted successfully!");
-      onClose();
+      try {
+        await deleteDoc(requestRef);
+        alert("Request has been deleted successfully!");
+        onClose();
+      } catch (deleteErr) {
+        if (softDeleteSuccess) {
+          alert("Request has been removed from view successfully.");
+          onClose();
+        } else {
+          throw deleteErr;
+        }
+      }
     } catch (error) {
       console.error("Delete failed:", error);
       alert("Failed to delete request. Check database rules.");
     } finally {
       setDeleting(false);
+    }
+  };
+
+  const [isExporting, setIsExporting] = useState(false);
+
+  const handleExportDocx = async () => {
+    setIsExporting(true);
+    try {
+      const response = await fetch('/pfrf2.docx');
+      if (!response.ok) {
+        throw new Error('Could not download PFRF template.');
+      }
+      const arrayBuffer = await response.arrayBuffer();
+
+      const zip = new PizZip(arrayBuffer);
+      const doc = new Docxtemplater(zip, { paragraphLoop: true, linebreaks: true });
+
+      const requestDate = request.createdAt && typeof request.createdAt.toDate === 'function'
+        ? request.createdAt.toDate().toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
+        : new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+
+      // Build text payload using exact placeholders from user's template
+      const payload = {
+        'NAME OF REQUESTER:': request.requesterName || 'N/A',
+        'DATE_REQUESTED:': requestDate,
+        'DESIGNATION:': request.designation || 'N/A',
+        'REQUEST NO:': request.ticketNo || request.requestNo || 'N/A',
+        'REASON OF PLAYBACK:': Array.isArray(request.playbackReasons) ? request.playbackReasons.join(', ') : request.playbackReason || 'N/A',
+        'DATE OF INCIDENT:': request.incidentDate || 'N/A',
+        'TIME OF INCIDENT:': request.incidentTime || 'N/A',
+        'LOCATION:': request.location === 'Other' ? request.locationOther : request.location || 'N/A',
+        'LANDMARK (if applicable):': request.landmark || 'N/A',
+        'VEHICLE/S INVOLVED (if applicable):': Array.isArray(request.vehiclesInvolved) ? request.vehiclesInvolved.join(', ') : request.vehiclesInvolved || 'N/A',
+        'Additional Info:': request.vehicleDescription || '',
+        'INCIDENT DESCRIPTION': request.incidentDescription || '',
+        ' FOLLOW UP ACTION / REMARKS (to be fill-out by CCTV operator)': remarks || request.operatorRemarks || '',
+        'ATTENDED BY:': attendedBy || profile?.displayName || user?.email || 'N/A',
+        'DATE_ATTENDED:': attendedDate || new Date().toLocaleDateString('en-US'),
+        'SUPERVISOR NAME/SIGNATURE:': supervisorName || request.approvedBy || '',
+        'DATE_APPROVED:': supervisorDate || (request.approvedAt ? new Date(request.approvedAt.seconds * 1000).toLocaleDateString('en-US') : ''),
+      };
+
+      doc.render(payload);
+
+      const out = doc.getZip().generate({
+        type: 'blob',
+        mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      });
+
+      saveAs(out, `PFRF_${request.ticketNo || request.requestNo}.docx`);
+    } catch (error: any) {
+      console.error('Export error:', error);
+      alert('Error generating document: ' + error.message);
+    } finally {
+      setIsExporting(false);
     }
   };
 
@@ -288,13 +357,14 @@ export default function RequestDetails({ request, onClose }: { request: any, onC
           </div>
 
           <div className="flex items-center gap-2">
-            {/* Show Print */}
+            {/* Show Export PFRF */}
             <button 
-              onClick={() => window.print()}
-              className="flex items-center gap-2 px-3.5 py-2 bg-white border border-gray-200 text-[10px] font-black text-gray-500 uppercase rounded-xl hover:bg-gray-150 hover:border-gray-300 transition-all shadow-xs"
+              onClick={handleExportDocx}
+              disabled={isExporting}
+              className="flex items-center gap-2 px-3.5 py-2 bg-indigo-50 border border-indigo-200 text-[10px] font-black text-indigo-700 uppercase rounded-xl hover:bg-indigo-100 hover:border-indigo-300 transition-all shadow-xs disabled:opacity-50"
             >
               <Printer className="w-3.5 h-3.5" />
-              Print Form
+              {isExporting ? 'Exporting...' : 'Export PFRF (DOCX)'}
             </button>
 
             {/* Toggle Edit Mode for Admin */}
@@ -545,7 +615,7 @@ export default function RequestDetails({ request, onClose }: { request: any, onC
                     ))}
                   </div>
                   <div className="pt-2">
-                    <label className="text-[10px] font-black text-gray-500 uppercase block mb-1">Specific Vehicle Quantities & Plates</label>
+                    <label className="text-[10px] font-black text-gray-500 uppercase block mb-1">Additional Info</label>
                     <textarea 
                       value={vehicleDescription}
                       onChange={(e) => setVehicleDescription(e.target.value)}
@@ -749,13 +819,34 @@ export default function RequestDetails({ request, onClose }: { request: any, onC
                       </p>
                       <button
                         type="button"
-                        onClick={() => {
+                        onClick={async () => {
                           const base = window.location.protocol + "//" + window.location.host;
                           const approvalLink = `${base}/?approve=${request.id}`;
-                          const messageText = `🚨 *CCTV FOOTAGE RELEASE FOR REVIEW* 🚨\n\n📌 *Ticket ID:* ${request.ticketNo || request.id}\n👤 *Requester:* ${request.requesterName}\n🗺️ *Incident Spot:* ${request.location === 'Other' ? request.locationOther : request.location}\n🕒 *Date/Time:* ${request.incidentDate} at ${request.incidentTime}\n📝 *Reasons:* ${request.playbackReasons ? request.playbackReasons.join(', ') : 'CCTV footage view'}\n\n👉 *Click here to review details & approve/deny digitally:* ${approvalLink}`;
+                          const reasonsList = Array.isArray(request.playbackReasons) 
+                            ? request.playbackReasons.join(', ') 
+                            : (request.playbackReason || 'CCTV footage view');
+                          const messageText = `🚨 *CCTV FOOTAGE RELEASE FOR REVIEW* 🚨\n\n📌 *Ticket ID:* ${request.ticketNo || request.id}\n👤 *Requester:* ${request.requesterName}\n🗺️ *Incident Spot:* ${request.location === 'Other' ? request.locationOther : request.location}\n🕒 *Date/Time:* ${request.incidentDate} at ${request.incidentTime}\n📝 *Reasons:* ${reasonsList}\n\n👉 *Click here to review details & approve/deny digitally:* ${approvalLink}`;
                           
-                          navigator.clipboard.writeText(messageText);
-                          alert("Awesome! Copied to clipboard. Now go to Messenger and click Paste (Ctrl+V) to send the direct live-approval link to the supervisor.");
+                          try {
+                            await navigator.clipboard.writeText(messageText);
+                            alert("Awesome! Copied to clipboard. Now go to Messenger and click Paste (Ctrl+V) to send the direct live-approval link to the supervisor.");
+                          } catch (err) {
+                            try {
+                              const textArea = document.createElement("textarea");
+                              textArea.value = messageText;
+                              textArea.style.position = "fixed";
+                              textArea.style.left = "-999999px";
+                              textArea.style.top = "-999999px";
+                              document.body.appendChild(textArea);
+                              textArea.focus();
+                              textArea.select();
+                              document.execCommand('copy');
+                              textArea.remove();
+                              alert("Awesome! Copied to clipboard. Now go to Messenger and click Paste (Ctrl+V) to send the direct live-approval link to the supervisor.");
+                            } catch (e) {
+                              alert("Failed to copy automatically. Please check permissions.");
+                            }
+                          }
                         }}
                         className="w-full flex items-center justify-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white py-2 px-3 rounded-xl text-[10px] font-black uppercase tracking-wider transition-colors shadow-sm"
                       >

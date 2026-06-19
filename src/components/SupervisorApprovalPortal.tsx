@@ -60,7 +60,8 @@ export default function SupervisorApprovalPortal({ requestId, onBackToPortal }: 
         supervisorName: supervisorNameInput.trim(),
         supervisorDate: todayString,
         approvedBy: supervisorNameInput.trim(),
-        updatedAt: serverTimestamp()
+        updatedAt: serverTimestamp(),
+        staffCode: 'cctv2026'
       });
 
       // Log the supervisor's dynamic approval action
@@ -71,7 +72,8 @@ export default function SupervisorApprovalPortal({ requestId, onBackToPortal }: 
         attendedBy: supervisorNameInput.trim(),
         action: 'APPROVED RELEASE',
         note: `Approved via Quick Supervisor Link on Messenger. Form cleared for footage copying.`,
-        timestamp: serverTimestamp()
+        timestamp: serverTimestamp(),
+        staffCode: 'cctv2026'
       });
 
       setCompletedStatus('approved');
@@ -99,7 +101,8 @@ export default function SupervisorApprovalPortal({ requestId, onBackToPortal }: 
         supervisorName: supervisorNameInput.trim(),
         supervisorDate: todayString,
         operatorRemarks: rejectionReason.trim(),
-        updatedAt: serverTimestamp()
+        updatedAt: serverTimestamp(),
+        staffCode: 'cctv2026'
       });
 
       // Log rejection action
@@ -110,7 +113,8 @@ export default function SupervisorApprovalPortal({ requestId, onBackToPortal }: 
         attendedBy: supervisorNameInput.trim(),
         action: 'DENIED / ARCHIVED',
         note: `Declined: "${rejectionReason.trim()}". Action performed via Quick Supervisor Link.`,
-        timestamp: serverTimestamp()
+        timestamp: serverTimestamp(),
+        staffCode: 'cctv2026'
       });
 
       setCompletedStatus('denied');
