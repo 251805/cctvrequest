@@ -37,15 +37,16 @@ export default function Navigation({ activeTab, setActiveTab }: { activeTab: str
             <span className="text-[10px] font-bold text-blue-300 uppercase tracking-widest">Online submission form</span>
           </div>
 
-          <div className="hidden md:flex items-center gap-1 ml-8">
+          <div className="flex items-center gap-1 ml-4 sm:ml-8">
             {user || profile ? (
                (profile?.role === 'operator' || profile?.role === 'admin') && (
                 <button 
                   onClick={() => setActiveTab('queue')}
-                  className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold transition-colors ${activeTab === 'queue' ? 'bg-white/10 text-white' : 'text-blue-200 hover:text-white'}`}
+                  className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-[11px] sm:text-xs font-bold transition-colors ${activeTab === 'queue' ? 'bg-white/10 text-white' : 'text-blue-200 hover:text-white'}`}
                 >
-                  <LayoutDashboard className="w-4 h-4" />
-                  Live Queue
+                  <LayoutDashboard className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">Live Queue</span>
+                  <span className="sm:hidden">Queue</span>
                 </button>
                )
             ) : null}

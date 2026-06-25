@@ -9,6 +9,9 @@ import { PFRFData } from '../types';
 import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { useAuth } from '../contexts/AuthContext';
+import Docxtemplater from 'docxtemplater';
+import PizZip from 'pizzip';
+import { saveAs } from 'file-saver';
 import { Send, CheckCircle2, Loader2, FileText, Camera, Upload, Trash2, X, Printer, HelpCircle, ZoomIn, ZoomOut } from 'lucide-react';
 
 const REASON_OPTIONS = [
@@ -74,7 +77,7 @@ const VEHICLE_OPTIONS = [
   "Service vehicles – police cars, fire trucks, ambulances.",
   "Agricultural – farm vehicle, tractors.",
   "Other motorized vehicles / multiple vehicles",
-  "Other Entity (not listed) — if selected, please fill out the description field to provide more details."
+  "Other Entity (not listed) — if selected, please fill out the incident description field to provide more details."
 ];
 
 const BARANGAY_MAPS: Record<string, string> = {
@@ -164,35 +167,121 @@ const TextArea = React.memo(({ label, name, value, placeholder, minHeight = "150
 export default function PFRFForm() {
   const { user } = useAuth();
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
   const [submittedId, setSubmittedId] = useState<string | null>(null);
   const [attachmentMethod, setAttachmentMethod] = useState<'upload' | 'camera' | null>(null);
-  const [capturedImage, setCapturedImage] = useState<string | null>(null);
+  const [attachments, setAttachments] = useState<{ name: string; data: string; type: 'image' | 'file' }[]>([]);
   const [isCameraLoading, setIsCameraLoading] = useState(false);
   const [showPinGuide, setShowPinGuide] = useState(false);
   const [isImageZoomed, setIsImageZoomed] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
+  const [videoAspectRatio, setVideoAspectRatio] = useState<number | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
-  const [uploadedFile, setUploadedFile] = useState<{ name: string; data: string } | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const videoRef = React.useRef<HTMLVideoElement>(null);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      if (file.size > 10 * 1024 * 1024) {
-        setFormError("File is too large. Please upload an image or document smaller than 10MB.");
+  // Helper to compress images client-side to keep Firestore document size small
+  const compressImageIfNeeded = (dataUrl: string, maxDim: number = 800, quality: number = 0.6): Promise<string> => {
+    return new Promise((resolve) => {
+      if (!dataUrl.startsWith('data:image/')) {
+        resolve(dataUrl);
         return;
       }
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setUploadedFile({
-          name: file.name,
-          data: reader.result as string,
-        });
-        setCapturedImage(null);
+      const img = new Image();
+      img.onload = () => {
+        let width = img.width;
+        let height = img.height;
+        if (width > maxDim || height > maxDim) {
+          if (width > height) {
+            height = Math.round((height * maxDim) / width);
+            width = maxDim;
+          } else {
+            width = Math.round((width * maxDim) / height);
+            height = maxDim;
+          }
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(img, 0, 0, width, height);
+          resolve(canvas.toDataURL('image/jpeg', quality));
+        } else {
+          resolve(dataUrl);
+        }
       };
-      reader.readAsDataURL(file);
+      img.onerror = () => {
+        resolve(dataUrl);
+      };
+      img.src = dataUrl;
+    });
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (files && files.length > 0) {
+      setFormError(null);
+      (Array.from(files) as File[]).forEach(file => {
+        const isImage = file.type.startsWith('image/');
+        const limitSize = isImage ? 15 * 1024 * 1024 : 450 * 1024; // 15MB for images (since we compress them), 450KB for documents
+        if (file.size > limitSize) {
+          if (isImage) {
+            setFormError(`Image "${file.name}" is too large. Please use a smaller image.`);
+          } else {
+            setFormError(`Document/file "${file.name}" is too large (${(file.size / 1024).toFixed(0)} KB). Since attachments are saved with the form, non-image files must be under 450 KB. Please upload smaller files or host them online and share a link.`);
+          }
+          return;
+        }
+
+        const reader = new FileReader();
+        reader.onloadend = async () => {
+          const fileType = isImage ? 'image' : 'file';
+          const rawData = reader.result as string;
+          try {
+            const finalData = fileType === 'image' ? await compressImageIfNeeded(rawData) : rawData;
+            setAttachments(prev => {
+              const currentTotalSize = prev.reduce((acc, att) => acc + att.data.length, 0);
+              const newTotalSize = currentTotalSize + finalData.length;
+              // Limit total character size to 800,000 (~600KB base64 content) to fit in Firestore 1MB limits
+              if (newTotalSize > 800000) {
+                setFormError(`Cannot add "${file.name}". The combined size of all attachments would exceed the database storage limit of 1MB. Please remove some existing attachments first.`);
+                return prev;
+              }
+              return [
+                ...prev,
+                {
+                  name: file.name,
+                  data: finalData,
+                  type: fileType,
+                }
+              ];
+            });
+          } catch (compressErr) {
+            // Fallback to raw data if compression fails
+            setAttachments(prev => {
+              const currentTotalSize = prev.reduce((acc, att) => acc + att.data.length, 0);
+              const newTotalSize = currentTotalSize + rawData.length;
+              if (newTotalSize > 800000) {
+                setFormError(`Cannot add "${file.name}". The combined size of all attachments would exceed the database storage limit of 1MB. Please remove some existing attachments first.`);
+                return prev;
+              }
+              return [
+                ...prev,
+                {
+                  name: file.name,
+                  data: rawData,
+                  type: fileType,
+                }
+              ];
+            });
+          }
+        };
+        reader.readAsDataURL(file);
+      });
+      // Clear value to allow re-upload
+      e.target.value = '';
     }
   };
 
@@ -208,21 +297,65 @@ export default function PFRFForm() {
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragOver(false);
-    const file = e.dataTransfer.files?.[0];
-    if (file) {
-      if (file.size > 10 * 1024 * 1024) {
-        setFormError("File is too large. Please upload an image or document smaller than 10MB.");
-        return;
-      }
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setUploadedFile({
-          name: file.name,
-          data: reader.result as string,
-        });
-        setCapturedImage(null);
-      };
-      reader.readAsDataURL(file);
+    const files = e.dataTransfer.files;
+    if (files && files.length > 0) {
+      setFormError(null);
+      (Array.from(files) as File[]).forEach(file => {
+        const isImage = file.type.startsWith('image/');
+        const limitSize = isImage ? 15 * 1024 * 1024 : 450 * 1024; // 15MB for images (since we compress them), 450KB for documents
+        if (file.size > limitSize) {
+          if (isImage) {
+            setFormError(`Image "${file.name}" is too large. Please use a smaller image.`);
+          } else {
+            setFormError(`Document/file "${file.name}" is too large (${(file.size / 1024).toFixed(0)} KB). Since attachments are saved with the form, non-image files must be under 450 KB. Please upload smaller files or host them online and share a link.`);
+          }
+          return;
+        }
+
+        const reader = new FileReader();
+        reader.onloadend = async () => {
+          const fileType = isImage ? 'image' : 'file';
+          const rawData = reader.result as string;
+          try {
+            const finalData = fileType === 'image' ? await compressImageIfNeeded(rawData) : rawData;
+            setAttachments(prev => {
+              const currentTotalSize = prev.reduce((acc, att) => acc + att.data.length, 0);
+              const newTotalSize = currentTotalSize + finalData.length;
+              if (newTotalSize > 800000) {
+                setFormError(`Cannot add "${file.name}". The combined size of all attachments would exceed the database storage limit of 1MB. Please remove some existing attachments first.`);
+                return prev;
+              }
+              return [
+                ...prev,
+                {
+                  name: file.name,
+                  data: finalData,
+                  type: fileType,
+                }
+              ];
+            });
+          } catch (compressErr) {
+            // Fallback to raw data
+            setAttachments(prev => {
+              const currentTotalSize = prev.reduce((acc, att) => acc + att.data.length, 0);
+              const newTotalSize = currentTotalSize + rawData.length;
+              if (newTotalSize > 800000) {
+                setFormError(`Cannot add "${file.name}". The combined size of all attachments would exceed the database storage limit of 1MB. Please remove some existing attachments first.`);
+                return prev;
+              }
+              return [
+                ...prev,
+                {
+                  name: file.name,
+                  data: rawData,
+                  type: fileType,
+                }
+              ];
+            });
+          }
+        };
+        reader.readAsDataURL(file);
+      });
     }
   };
 
@@ -282,7 +415,7 @@ export default function PFRFForm() {
         videoRef.current.srcObject = stream;
       }
     } catch (err: any) {
-      console.error("Camera access failed all fallbacks:", err);
+      console.warn("Camera access failed all fallbacks:", err);
       let errorMessage = `Camera error: ${err.message || err.name || 'Unknown'}`;
       const lowerMessage = String(err.message || '').toLowerCase();
       
@@ -309,6 +442,7 @@ export default function PFRFForm() {
       stream.getTracks().forEach(track => track.stop());
     }
     setAttachmentMethod(null);
+    setVideoAspectRatio(null);
   };
 
   const takePhoto = () => {
@@ -318,7 +452,41 @@ export default function PFRFForm() {
       canvas.height = videoRef.current.videoHeight;
       const ctx = canvas.getContext('2d');
       ctx?.drawImage(videoRef.current, 0, 0);
-      setCapturedImage(canvas.toDataURL('image/jpeg', 0.8));
+      const photoDataUrl = canvas.toDataURL('image/jpeg', 0.85);
+      
+      compressImageIfNeeded(photoDataUrl).then(compressedDataUrl => {
+        setAttachments(prev => {
+          const currentTotalSize = prev.reduce((acc, att) => acc + att.data.length, 0);
+          if (currentTotalSize + compressedDataUrl.length > 800000) {
+            setFormError("Cannot add photo. The combined size of all attachments would exceed the database storage limit of 1MB. Please remove some existing attachments first.");
+            return prev;
+          }
+          return [
+            ...prev,
+            {
+              name: `camera_capture_${Date.now()}.jpg`,
+              data: compressedDataUrl,
+              type: 'image',
+            }
+          ];
+        });
+      }).catch(() => {
+        setAttachments(prev => {
+          const currentTotalSize = prev.reduce((acc, att) => acc + att.data.length, 0);
+          if (currentTotalSize + photoDataUrl.length > 800000) {
+            setFormError("Cannot add photo. The combined size of all attachments would exceed the database storage limit of 1MB. Please remove some existing attachments first.");
+            return prev;
+          }
+          return [
+            ...prev,
+            {
+              name: `camera_capture_${Date.now()}.jpg`,
+              data: photoDataUrl,
+              type: 'image',
+            }
+          ];
+        });
+      });
       stopCamera();
     }
   };
@@ -390,11 +558,6 @@ export default function PFRFForm() {
       return;
     }
 
-    if (!formData.vehicleDescription?.trim()) {
-      setFormError("Please provide Specific Vehicle Details & Quantities.");
-      return;
-    }
-
     if (!formData.incidentDescription?.trim()) {
       setFormError("Please provide an Incident Description.");
       return;
@@ -417,8 +580,8 @@ export default function PFRFForm() {
       }
     }
 
-    if (!capturedImage && !uploadedFile) {
-      setFormError("Please provide a Supporting Document (either upload a file/document or take a device camera photo).");
+    if (attachments.length === 0) {
+      setFormError("Please provide at least one Supporting Document (either upload a file/document or take a device camera photo).");
       return;
     }
 
@@ -427,12 +590,28 @@ export default function PFRFForm() {
       const submissionData = {
         ...formData,
         requesterUid: user?.uid || 'guest-public',
-        hasAttachment: !!capturedImage || !!uploadedFile,
-        attachmentName: uploadedFile?.name || null,
-        attachmentData: capturedImage || uploadedFile?.data || null,
+        hasAttachment: attachments.length > 0,
+        attachmentName: attachments[0]?.name || null,
+        attachmentData: attachments[0]?.data || null,
+        attachments: attachments,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       };
+
+      // Measure the actual raw bytes of the payload to guarantee Firestore size limits (1,048,576 bytes) are met
+      const measurementPayload = {
+        ...submissionData,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      const serializedData = JSON.stringify(measurementPayload);
+      const payloadByteSize = new Blob([serializedData]).size;
+
+      if (payloadByteSize > 1000000) {
+        setFormError(`Submission failed because the total form data size (${(payloadByteSize / (1024 * 1024)).toFixed(2)} MB) exceeds the database's 1 MB storage limit. Please remove one or more attachments, or compress your files before trying again.`);
+        setIsSubmitting(false);
+        return;
+      }
 
       const docRef = await addDoc(collection(db, 'requests'), submissionData);
       setSubmittedId(docRef.id);
@@ -441,6 +620,57 @@ export default function PFRFForm() {
       setFormError("Error submitting form. Please try again.");
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  const handleExportDocx = async () => {
+    setIsExporting(true);
+    try {
+      const response = await fetch('/pfrf1.docx');
+      if (!response.ok) {
+        throw new Error('Could not download PFRF template.');
+      }
+      const arrayBuffer = await response.arrayBuffer();
+
+      const zip = new PizZip(arrayBuffer);
+      const doc = new Docxtemplater(zip, { paragraphLoop: true, linebreaks: true });
+
+      const requestDate = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+
+      // Build text payload using exact placeholders from user's template
+      const payload = {
+        'NAME OF REQUESTER:': formData.requesterName || 'N/A',
+        'DATE_REQUESTED:': requestDate,
+        'DESIGNATION:': formData.designation || 'N/A',
+        'REQUEST NO:': formData.requestNo || 'N/A',
+        'REASON OF PLAYBACK:': Array.isArray(formData.playbackReasons) ? formData.playbackReasons.join(', ') : formData.playbackReasons || 'N/A',
+        'DATE OF INCIDENT:': formData.incidentDate || 'N/A',
+        'TIME OF INCIDENT:': formData.incidentTime || 'N/A',
+        'LOCATION:': formData.location === 'Other' || formData.location === 'Other location' ? formData.locationOther : formData.location || 'N/A',
+        'LANDMARK (if applicable):': formData.landmark || 'N/A',
+        'VEHICLE/S INVOLVED (if applicable):': Array.isArray(formData.vehiclesInvolved) ? formData.vehiclesInvolved.join(', ') : formData.vehiclesInvolved || 'N/A',
+      'Additional Info:': formData.vehicleDescription || '',
+        'INCIDENT DESCRIPTION': formData.incidentDescription || '',
+        ' FOLLOW UP ACTION / REMARKS (to be fill-out by CCTV operator)': formData.operatorRemarks || '',
+        'ATTENDED BY:': formData.attendedBy || 'N/A',
+        'DATE_ATTENDED:': formData.attendedDate || '',
+        'SUPERVISOR NAME/SIGNATURE:': formData.supervisorName || '',
+        'DATE_APPROVED:': formData.supervisorDate || '',
+      };
+
+      doc.render(payload);
+
+      const out = doc.getZip().generate({
+        type: 'blob',
+        mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      });
+
+      saveAs(out, `${formData.requestNo}.docx`);
+    } catch (error: any) {
+      console.error('Export error:', error);
+      alert('Error generating document: ' + error.message);
+    } finally {
+      setIsExporting(false);
     }
   };
 
@@ -469,8 +699,7 @@ export default function PFRFForm() {
       supervisorDate: '',
       approvedBy: '',
     });
-    setCapturedImage(null);
-    setUploadedFile(null);
+    setAttachments([]);
     setAttachmentMethod(null);
     setSubmittedId(null);
   };
@@ -481,7 +710,7 @@ export default function PFRFForm() {
         <div className="print:hidden flex flex-col items-center space-y-6">
           <CheckCircle2 className="w-16 h-16 md:w-20 md:h-20 text-green-500" />
           <h2 className="text-2xl md:text-3xl font-black text-blue-900 uppercase">Submission Successful</h2>
-          <p className="text-gray-600 font-medium px-4">Your request has been documented and queued for processing by Pagbilao PNP.</p>
+          <p className="text-gray-600 font-medium px-4">Your request has been documented and queued for processing by Pagbilao Command Center.</p>
         </div>
         
         <div className="bg-blue-50 p-6 md:p-8 rounded-2xl border border-blue-100 w-full max-w-sm shadow-sm relative overflow-hidden group">
@@ -494,11 +723,21 @@ export default function PFRFForm() {
 
         <div className="flex flex-col md:flex-row gap-4 w-full max-w-md pt-4 print:hidden">
           <button 
-            onClick={() => window.print()}
-            className="flex-1 flex items-center justify-center gap-3 bg-white border-2 border-blue-600 text-blue-600 px-8 py-4 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-blue-50 transition-all shadow-lg"
+            onClick={handleExportDocx}
+            disabled={isExporting}
+            className="flex-1 flex items-center justify-center gap-3 bg-white border-2 border-blue-600 text-blue-600 px-8 py-4 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-blue-50 transition-all shadow-lg disabled:opacity-50"
           >
-            <Printer className="w-4 h-4" />
-            Print Copy
+            {isExporting ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin" />
+                Exporting...
+              </>
+            ) : (
+              <>
+                <Printer className="w-4 h-4" />
+                Print Copy
+              </>
+            )}
           </button>
           <button 
             onClick={handleReset}
@@ -595,7 +834,7 @@ export default function PFRFForm() {
               )}
             </div>
 
-            <div className="grid grid-cols-2 gap-8 pt-4 border-t border-gray-100">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-8 pt-4 border-t border-gray-100">
               <Field label="DATE OF INCIDENT" name="incidentDate" value={formData.incidentDate} type="date" onChange={handleChange} required />
               <Field label="TIME OF INCIDENT" name="incidentTime" value={formData.incidentTime} type="time" onChange={handleChange} required />
             </div>
@@ -677,17 +916,6 @@ export default function PFRFForm() {
                 name="vehiclesInvolved" 
                 onChange={handleChange} 
               />
-              <div className="mt-4 pt-4 border-t border-gray-100">
-                <TextArea
-                  label="Additional Info "
-                  name="vehicleDescription"
-                  value={formData.vehicleDescription}
-                  onChange={handleChange}
-                  required={true}
-                  placeholder=" "
-                  minHeight="80px"
-                />
-              </div>
             </div>
           </div>
         </div>
@@ -726,7 +954,7 @@ export default function PFRFForm() {
             >
               <Upload className={`w-8 h-8 ${attachmentMethod === 'upload' || isDragOver ? 'text-blue-500' : 'text-gray-300'}`} />
               <span className="text-[10px] font-black uppercase tracking-widest text-gray-400">
-                {isDragOver ? "Drop File Here" : "Upload File"}
+                {isDragOver ? "Drop File Here" : "Upload File up to 450 KB"}
               </span>
             </button>
             <button 
@@ -748,8 +976,50 @@ export default function PFRFForm() {
             className="hidden"
           />
 
-          {attachmentMethod === 'camera' && !capturedImage && (
-            <div className="mt-4 relative bg-black rounded-2xl overflow-hidden aspect-video shadow-2xl flex items-center justify-center">
+          {/* Active Attachments Grid */}
+          {attachments.length > 0 && (
+            <div className="mt-6">
+              <h4 className="text-[10px] font-black uppercase text-gray-400 mb-3 tracking-widest">Added Attachments ({attachments.length})</h4>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {attachments.map((att, idx) => (
+                  <div key={idx} className="relative group rounded-2xl border border-gray-150 bg-white p-3.5 flex items-center justify-between shadow-xs hover:border-blue-200 transition-all">
+                    <div className="flex items-center gap-3 min-w-0 flex-1">
+                      {att.type === 'image' ? (
+                        <div className="w-12 h-12 rounded-xl overflow-hidden bg-gray-50 flex-shrink-0 border border-gray-100">
+                          <img src={att.data} alt="Attachment thumbnail" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                        </div>
+                      ) : (
+                        <div className="w-12 h-12 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center flex-shrink-0 border border-blue-100">
+                          <FileText className="w-5 h-5" />
+                        </div>
+                      )}
+                      <div className="min-w-0 flex-1">
+                        <p className="text-xs font-bold text-gray-800 truncate font-mono">{att.name}</p>
+                        <p className="text-[9px] font-black text-gray-400 uppercase tracking-wider">{att.type === 'image' ? 'Image Capture' : 'Uploaded Document'}</p>
+                      </div>
+                    </div>
+                    <button 
+                      type="button"
+                      onClick={() => setAttachments(prev => prev.filter((_, i) => i !== idx))}
+                      className="ml-2 bg-red-50 hover:bg-red-100 text-red-500 hover:text-red-600 p-2 rounded-xl transition-all flex-shrink-0 border border-red-100/30"
+                      title="Remove Attachment"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {attachmentMethod === 'camera' && (
+            <div 
+              className="mt-4 relative bg-black rounded-2xl overflow-hidden shadow-2xl flex items-center justify-center w-full max-w-md mx-auto transition-all duration-300"
+              style={{ 
+                aspectRatio: videoAspectRatio ? `${videoAspectRatio}` : '4/3',
+                maxHeight: '60vh'
+              }}
+            >
               {isCameraLoading && (
                 <div className="absolute inset-0 flex items-center justify-center bg-gray-900 z-10">
                   <Loader2 className="w-8 h-8 text-white animate-spin" />
@@ -786,13 +1056,25 @@ export default function PFRFForm() {
                 </div>
               ) : (
                 <>
-                  <video ref={videoRef} autoPlay playsInline className="w-full h-full object-cover" />
+                  <video 
+                    ref={videoRef} 
+                    autoPlay 
+                    playsInline 
+                    onLoadedMetadata={(e) => {
+                      const video = e.currentTarget;
+                      if (video.videoWidth && video.videoHeight) {
+                        setVideoAspectRatio(video.videoWidth / video.videoHeight);
+                      }
+                    }}
+                    className="w-full h-full object-cover" 
+                  />
                   {!isCameraLoading && (
                     <div className="absolute bottom-4 left-0 right-0 flex justify-center gap-4 z-20">
                       <button 
                         type="button" 
                         onClick={takePhoto}
-                        className="bg-white text-blue-900 p-4 rounded-full shadow-lg hover:scale-110 transition-transform"
+                        className="bg-white text-blue-900 p-4 rounded-full shadow-lg hover:scale-110 transition-transform animate-pulse"
+                        title="Capture Photo"
                       >
                         <Camera className="w-6 h-6" />
                       </button>
@@ -800,6 +1082,7 @@ export default function PFRFForm() {
                         type="button" 
                         onClick={stopCamera}
                         className="bg-red-500 text-white p-4 rounded-full shadow-lg hover:scale-110 transition-transform"
+                        title="Close Camera"
                       >
                         <X className="w-6 h-6" />
                       </button>
@@ -810,52 +1093,20 @@ export default function PFRFForm() {
             </div>
           )}
 
-          {capturedImage && (
-            <div className="mt-4 relative rounded-2xl overflow-hidden aspect-video shadow-xl border-4 border-white">
-              <img src={capturedImage} className="w-full h-full object-cover" alt="Captured" />
-              <button 
-                type="button"
-                onClick={() => setCapturedImage(null)}
-                className="absolute top-4 right-4 bg-red-500 text-white p-2 rounded-full shadow-lg hover:bg-red-600 transition-colors"
-              >
-                <Trash2 className="w-4 h-4" />
-              </button>
-            </div>
-          )}
-
-          {uploadedFile && (
-            <div className="mt-4 relative rounded-2xl border border-green-200 bg-green-50 p-4 flex items-center justify-between shadow-sm">
-              <div className="flex items-center gap-3">
-                <div className="bg-green-500 text-white p-2.5 rounded-xl">
-                  <FileText className="w-5 h-5" />
-                </div>
-                <div>
-                  <p className="font-bold text-[11px] text-green-800 uppercase tracking-wider">File Uploaded Successfully</p>
-                  <p className="text-xs text-gray-700 font-medium font-mono mb-0.5">{uploadedFile.name}</p>
-                </div>
-              </div>
-              <button 
-                type="button"
-                onClick={() => setUploadedFile(null)}
-                className="bg-red-500 hover:bg-red-600 text-white p-2 rounded-full transition-colors shadow-sm"
-              >
-                <Trash2 className="w-4 h-4" />
-              </button>
-            </div>
-          )}
-
-          {attachmentMethod === 'upload' && !uploadedFile && (
+          {attachmentMethod === 'upload' && (
             <div 
               onDragOver={handleDragOver}
               onDragLeave={handleDragLeave}
               onDrop={handleDrop}
               onClick={() => fileInputRef.current?.click()}
-              className={`mt-4 p-8 border-2 border-dashed rounded-2xl text-center cursor-pointer transition-all ${isDragOver ? 'border-blue-500 bg-blue-50/50' : 'border-gray-200 bg-gray-50'}`}
+              className={`mt-4 p-8 border-2 border-dashed rounded-2xl text-center cursor-pointer transition-all ${isDragOver ? 'border-blue-500 bg-blue-50/50' : 'border-gray-200 bg-gray-50 hover:border-gray-300 hover:bg-gray-100/50'}`}
             >
-              <p className="text-[10px] font-bold text-gray-400 uppercase">Police Report / Court Subpoena / ID</p>
+              <Upload className="w-6 h-6 text-gray-300 mx-auto mb-2" />
+              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Drag and Drop Supporting Documents here</p>
               <button type="button" className="text-[10px] font-black text-blue-600 uppercase hover:underline mt-2">
-                {isDragOver ? "Drop your file here" : "Choose From Device"}
+                {isDragOver ? "Drop your files here" : "Or Choose From Device"}
               </button>
+              <p className="text-[9px] text-gray-400 uppercase mt-1">Accepts images, PDF, and Word documents up to 10MB</p>
             </div>
           )}
         </div>

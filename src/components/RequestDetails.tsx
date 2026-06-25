@@ -45,7 +45,7 @@ const VEHICLE_OPTIONS = [
   "Service vehicles – police cars, fire trucks, ambulances.",
   "Agricultural – farm vehicle, tractors.",
   "Other motorized vehicles / multiple vehicles",
-  "Other Entity (not listed) — if selected, please fill out the description field to provide more details."
+  "Other Entity (not listed) — if selected, please fill out the incident description field to provide more details."
 ];
 
 const LOCATION_OPTIONS = [
@@ -118,6 +118,7 @@ export default function RequestDetails({ request, onClose }: { request: any, onC
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
+  const [activePreviewAttachment, setActivePreviewAttachment] = useState<{ name: string; data: string; type?: string } | null>(null);
   const [showSaveConfirmModal, setShowSaveConfirmModal] = useState(false);
   const [suggestedStatus, setSuggestedStatus] = useState<string | null>(null);
 
@@ -294,7 +295,7 @@ export default function RequestDetails({ request, onClose }: { request: any, onC
   const handleExportDocx = async () => {
     setIsExporting(true);
     try {
-      const response = await fetch('/pfrf2.docx');
+      const response = await fetch('/pfrf1.docx');
       if (!response.ok) {
         throw new Error('Could not download PFRF template.');
       }
@@ -319,7 +320,7 @@ export default function RequestDetails({ request, onClose }: { request: any, onC
         'LOCATION:': request.location === 'Other' ? request.locationOther : request.location || 'N/A',
         'LANDMARK (if applicable):': request.landmark || 'N/A',
         'VEHICLE/S INVOLVED (if applicable):': Array.isArray(request.vehiclesInvolved) ? request.vehiclesInvolved.join(', ') : request.vehiclesInvolved || 'N/A',
-        'Additional Info:': request.vehicleDescription || '',
+      'Additional Info:': request.vehicleDescription || '',
         'INCIDENT DESCRIPTION': request.incidentDescription || '',
         ' FOLLOW UP ACTION / REMARKS (to be fill-out by CCTV operator)': remarks || request.operatorRemarks || '',
         'ATTENDED BY:': attendedBy || profile?.displayName || user?.email || 'N/A',
@@ -615,7 +616,7 @@ export default function RequestDetails({ request, onClose }: { request: any, onC
                     ))}
                   </div>
                   <div className="pt-2">
-                    <label className="text-[10px] font-black text-gray-500 uppercase block mb-1">Additional Info</label>
+                  <label className="text-[10px] font-black text-gray-500 uppercase block mb-1">Additional Info</label>
                     <textarea 
                       value={vehicleDescription}
                       onChange={(e) => setVehicleDescription(e.target.value)}
@@ -644,70 +645,69 @@ export default function RequestDetails({ request, onClose }: { request: any, onC
             </div>
 
             {/* 5. ATTACHMENTS VIEW CONTAINER */}
-            {(request.hasAttachment || request.attachmentData) && (
-              <div className="border border-gray-200 rounded-2xl p-5 md:p-6 bg-white space-y-4 print:hidden">
-                <div className="bg-gray-800 text-white px-3.5 py-1.5 font-bold text-[9px] uppercase tracking-[0.2em] rounded flex items-center gap-1.5">
-                  <Camera className="w-3.5 h-3.5" /> Supporting Attestation / Document Evidence
-                </div>
+            {(() => {
+              const attachmentsList = request.attachments && request.attachments.length > 0
+                ? request.attachments
+                : (request.attachmentData ? [{
+                    name: request.attachmentName || 'evidence_document',
+                    data: request.attachmentData,
+                    type: request.attachmentData.startsWith('data:image/') ? 'image' : 'file'
+                  }] : []);
 
-                {request.attachmentData ? (
-                  request.attachmentData.startsWith('data:image/') ? (
-                    <div className="relative group overflow-hidden rounded-xl border border-gray-250 max-h-80 flex items-center justify-center bg-[#fafafa]">
-                      <img 
-                        src={request.attachmentData} 
-                        alt="Supporting attachment file" 
-                        className="max-h-80 object-contain hover:scale-[1.02] transition-transform duration-300"
-                        referrerPolicy="no-referrer"
-                      />
-                      <div className="absolute bottom-3 right-3 flex items-center gap-2">
-                        <button 
-                          onClick={() => setIsPreviewOpen(true)}
-                          className="bg-[#1e3a8a] hover:bg-blue-700 text-white text-[9px] px-3 py-1.5 rounded-lg font-black uppercase tracking-widest transition-colors shadow-lg flex items-center gap-1.5 animate-pulse"
-                        >
-                          <Eye className="w-3 h-3" /> View Image
-                        </button>
-                        <a 
-                          href={request.attachmentData} 
-                          download={request.attachmentName || 'pcc_footage_request_attachment.jpg'}
-                          className="bg-black/70 hover:bg-black/90 text-white text-[9px] px-3 py-1.5 rounded-lg font-black uppercase tracking-widest transition-colors shadow-lg"
-                        >
-                          Download Image File
-                        </a>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="flex items-center gap-3 p-4 bg-blue-50/40 rounded-xl border border-blue-200 justify-between shadow-xs flex-wrap md:flex-nowrap">
-                      <div className="flex items-center gap-3">
-                        <div className="bg-blue-600 text-white p-2.5 rounded-xl">
-                          <FileCheck className="w-5 h-5" />
+              if (attachmentsList.length === 0) return null;
+
+              return (
+                <div className="border border-gray-200 rounded-2xl p-5 md:p-6 bg-white space-y-4 print:hidden">
+                  <div className="bg-gray-800 text-white px-3.5 py-1.5 font-bold text-[9px] uppercase tracking-[0.2em] rounded flex items-center gap-1.5">
+                    <Camera className="w-3.5 h-3.5" /> Supporting Attestations / Document Evidence ({attachmentsList.length})
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-4">
+                    {attachmentsList.map((att, idx) => {
+                      const isImg = att.type === 'image' || att.data.startsWith('data:image/');
+                      return (
+                        <div key={idx} className="border border-gray-100 rounded-xl p-3 bg-gray-50/50 flex flex-col md:flex-row items-start md:items-center justify-between gap-3 shadow-xs">
+                          <div className="flex items-center gap-3 min-w-0">
+                            {isImg ? (
+                              <div className="w-14 h-14 rounded-lg overflow-hidden bg-white border border-gray-150 flex-shrink-0 flex items-center justify-center">
+                                <img src={att.data} alt="Evidence thumbnail" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                              </div>
+                            ) : (
+                              <div className="w-14 h-14 rounded-lg bg-blue-50 text-blue-600 border border-blue-100 flex items-center justify-center flex-shrink-0">
+                                <FileCheck className="w-6 h-6" />
+                              </div>
+                            )}
+                            <div className="min-w-0">
+                              <p className="text-xs font-bold text-gray-800 truncate font-mono max-w-xs md:max-w-md">{att.name}</p>
+                              <p className="text-[10px] font-black text-gray-400 uppercase mt-0.5 tracking-wider">{isImg ? 'Camera Capture / Image File' : 'Document Attachment'}</p>
+                            </div>
+                          </div>
+                          
+                          <div className="flex items-center gap-2 shrink-0 w-full md:w-auto justify-end">
+                            <button 
+                              onClick={() => {
+                                setActivePreviewAttachment(att);
+                                setIsPreviewOpen(true);
+                              }}
+                              className="bg-[#1e3a8a] hover:bg-blue-800 text-white text-[10px] px-3.5 py-2 rounded-xl font-bold uppercase tracking-wider transition-colors shadow-xs flex items-center gap-1.5"
+                            >
+                              <Eye className="w-3.5 h-3.5" /> View
+                            </button>
+                            <a 
+                              href={att.data} 
+                              download={att.name}
+                              className="bg-blue-600 hover:bg-blue-700 text-white text-[10px] px-3.5 py-2 rounded-xl font-bold uppercase tracking-wider transition-colors shadow-xs"
+                            >
+                              Download
+                            </a>
+                          </div>
                         </div>
-                        <div>
-                          <p className="text-[10px] font-black text-blue-800 uppercase tracking-widest">Document Attachment Loaded</p>
-                          <p className="text-xs text-gray-700 font-bold font-mono truncate max-w-sm mt-0.5">{request.attachmentName || 'attested_document.pdf'}</p>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-2 shrink-0 w-full md:w-auto mt-2 md:mt-0 justify-end">
-                        <button 
-                          onClick={() => setIsPreviewOpen(true)}
-                          className="bg-[#1e3a8a] hover:bg-blue-800 text-white text-[10px] px-4 py-2 rounded-xl font-black uppercase tracking-wider transition-colors shadow-md shadow-blue-100 flex items-center gap-1.5"
-                        >
-                          <Eye className="w-3.5 h-3.5" /> View Document
-                        </button>
-                        <a 
-                          href={request.attachmentData} 
-                          download={request.attachmentName || 'document'}
-                          className="bg-blue-600 hover:bg-blue-700 text-white text-[10px] px-4 py-2 rounded-xl font-black uppercase tracking-wider transition-colors shadow-md shadow-blue-100"
-                        >
-                          Download Document
-                        </a>
-                      </div>
-                    </div>
-                  )
-                ) : (
-                  <p className="text-xs text-gray-500 font-medium italic">Attachment reported but binary data is empty.</p>
-                )}
-              </div>
-            )}
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })()}
 
             {/* FOLLOW UP ACTION / REMARKS Display Section */}
             <div className="border border-gray-200 rounded-2xl p-5 md:p-6 bg-[#f9fafb] space-y-4 print:block">
@@ -973,90 +973,104 @@ export default function RequestDetails({ request, onClose }: { request: any, onC
       </div>
 
       {/* Modern High-Fidelity Modal Overlay for Evidence & Image Viewer */}
-      {isPreviewOpen && (
-        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-black/85 backdrop-blur-md transition-opacity duration-300">
-          <div className="relative bg-white rounded-2xl shadow-3xl flex flex-col w-full max-w-6xl h-[90vh] overflow-hidden border border-gray-100">
-            
-            {/* Modal Header */}
-            <div className="flex items-center justify-between p-4 border-b border-gray-150 bg-gray-50 shrink-0">
-              <div className="flex items-center gap-2.5">
-                <div className="bg-blue-50 text-blue-700 p-2 rounded-lg">
-                  <FileCheck className="w-5 h-5" />
-                </div>
-                <div>
-                  <h3 className="font-extrabold text-xs text-gray-900 uppercase tracking-wider">Document Evidence / Supporting Attestation</h3>
-                  <p className="text-[10px] text-gray-500 truncate max-w-md mt-0.5 font-mono">{request.attachmentName || 'attested_document.pdf'}</p>
-                </div>
-              </div>
-              <div className="flex items-center gap-2">
-                <a 
-                  href={request.attachmentData} 
-                  download={request.attachmentName || 'evidence_document'}
-                  className="bg-blue-600 hover:bg-blue-700 text-white text-[10px] px-4 py-2 rounded-xl font-bold uppercase tracking-wider transition-colors inline-flex items-center gap-1.5 shadow-md shadow-blue-100"
-                >
-                  Download This File
-                </a>
-                <button 
-                  onClick={() => setIsPreviewOpen(false)}
-                  className="p-1.5 rounded-lg hover:bg-gray-200 text-gray-400 hover:text-gray-600 transition-colors"
-                  aria-label="Close Preview"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-            </div>
+      {isPreviewOpen && (() => {
+        const activeName = activePreviewAttachment?.name || request.attachmentName || 'evidence_document';
+        const activeData = activePreviewAttachment?.data || request.attachmentData;
+        const isImg = activePreviewAttachment?.type === 'image' || (activeData?.startsWith('data:image/') ?? false);
 
-            {/* Modal Content - Dynamic Display */}
-            <div className="flex-grow p-4 min-h-0 bg-gray-100 flex items-center justify-center overflow-auto">
-              {request.attachmentData ? (
-                request.attachmentData.startsWith('data:image/') ? (
-                  <div className="relative flex items-center justify-center h-full w-full">
-                    <img 
-                      src={request.attachmentData} 
-                      alt="Supporting Evidence Preview" 
-                      className="max-h-full max-w-full object-contain shadow-md rounded-xl bg-white p-2"
-                      referrerPolicy="no-referrer"
+        return (
+          <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-black/85 backdrop-blur-md transition-opacity duration-300">
+            <div className="relative bg-white rounded-2xl shadow-3xl flex flex-col w-full max-w-6xl h-[90vh] overflow-hidden border border-gray-100">
+              
+              {/* Modal Header */}
+              <div className="flex items-center justify-between p-4 border-b border-gray-150 bg-gray-50 shrink-0">
+                <div className="flex items-center gap-2.5">
+                  <div className="bg-blue-50 text-blue-700 p-2 rounded-lg">
+                    <FileCheck className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="font-extrabold text-xs text-gray-900 uppercase tracking-wider">Document Evidence / Supporting Attestation</h3>
+                    <p className="text-[10px] text-gray-500 truncate max-w-md mt-0.5 font-mono">{activeName}</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  {activeData && (
+                    <a 
+                      href={activeData} 
+                      download={activeName}
+                      className="bg-blue-600 hover:bg-blue-700 text-white text-[10px] px-4 py-2 rounded-xl font-bold uppercase tracking-wider transition-colors inline-flex items-center gap-1.5 shadow-md shadow-blue-100"
+                    >
+                      Download This File
+                    </a>
+                  )}
+                  <button 
+                    onClick={() => {
+                      setIsPreviewOpen(false);
+                      setActivePreviewAttachment(null);
+                    }}
+                    className="p-1.5 rounded-lg hover:bg-gray-200 text-gray-400 hover:text-gray-600 transition-colors"
+                    aria-label="Close Preview"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Modal Content - Dynamic Display */}
+              <div className="flex-grow p-4 min-h-0 bg-gray-100 flex items-center justify-center overflow-auto">
+                {activeData ? (
+                  isImg ? (
+                    <div className="relative flex items-center justify-center h-full w-full">
+                      <img 
+                        src={activeData} 
+                        alt="Supporting Evidence Preview" 
+                        className="max-h-full max-w-full object-contain shadow-md rounded-xl bg-white p-2"
+                        referrerPolicy="no-referrer"
+                      />
+                    </div>
+                  ) : activeData.startsWith('data:application/pdf') || activeData.includes('application/pdf') ? (
+                    <iframe 
+                      src={activeData} 
+                      className="w-full h-full rounded-xl bg-white border border-gray-200 shadow-inner" 
+                      title="PDF Evidence Viewer"
                     />
-                  </div>
-                ) : request.attachmentData.startsWith('data:application/pdf') || request.attachmentData.includes('application/pdf') ? (
-                  <iframe 
-                    src={request.attachmentData} 
-                    className="w-full h-full rounded-xl bg-white border border-gray-200 shadow-inner" 
-                    title="PDF Evidence Viewer"
-                  />
+                  ) : (
+                    <div className="text-center p-8 bg-white rounded-2xl shadow-xl border border-gray-200 max-w-lg mx-auto">
+                      <div className="w-16 h-16 bg-blue-50 text-blue-600 rounded-full flex items-center justify-center mx-auto mb-4">
+                        <FileCheck className="w-8 h-8" />
+                      </div>
+                      <h4 className="text-sm font-black text-gray-900 uppercase tracking-wide mb-1.5">No Inline Preview Available</h4>
+                      <p className="text-xs text-gray-500 mb-5 leading-relaxed">
+                        This specific file ({activeName}) belongs to a format that modern web browsers cannot render directly inside a sandboxed frame dashboard.
+                      </p>
+                      <div className="flex items-center justify-center gap-3">
+                        <a 
+                          href={activeData} 
+                          download={activeName}
+                          className="bg-blue-600 hover:bg-blue-700 text-white text-[10px] px-5 py-2.5 rounded-xl font-black uppercase tracking-wider transition-colors shadow-lg shadow-blue-100"
+                        >
+                          Download file to view locally
+                        </a>
+                        <button 
+                          onClick={() => {
+                            setIsPreviewOpen(false);
+                            setActivePreviewAttachment(null);
+                          }}
+                          className="bg-gray-100 hover:bg-gray-150 text-gray-700 text-[10px] px-5 py-2.5 rounded-xl font-black uppercase tracking-wider transition-colors"
+                        >
+                          Dismiss
+                        </button>
+                      </div>
+                    </div>
+                  )
                 ) : (
-                  <div className="text-center p-8 bg-white rounded-2xl shadow-xl border border-gray-200 max-w-lg mx-auto">
-                    <div className="w-16 h-16 bg-blue-50 text-blue-600 rounded-full flex items-center justify-center mx-auto mb-4">
-                      <FileCheck className="w-8 h-8" />
-                    </div>
-                    <h4 className="text-sm font-black text-gray-900 uppercase tracking-wide mb-1.5">No Inline Preview Available</h4>
-                    <p className="text-xs text-gray-500 mb-5 leading-relaxed">
-                      This specific file ({request.attachmentName || 'attachment'}) belongs to a format that modern web browsers cannot render directly inside a sandboxed frame dashboard.
-                    </p>
-                    <div className="flex items-center justify-center gap-3">
-                      <a 
-                        href={request.attachmentData} 
-                        download={request.attachmentName || 'evidence_document'}
-                        className="bg-blue-600 hover:bg-blue-700 text-white text-[10px] px-5 py-2.5 rounded-xl font-black uppercase tracking-wider transition-colors shadow-lg shadow-blue-100"
-                      >
-                        Download file to view locally
-                      </a>
-                      <button 
-                        onClick={() => setIsPreviewOpen(false)}
-                        className="bg-gray-100 hover:bg-gray-150 text-gray-700 text-[10px] px-5 py-2.5 rounded-xl font-black uppercase tracking-wider transition-colors"
-                      >
-                        Dismiss
-                      </button>
-                    </div>
-                  </div>
-                )
-              ) : (
-                <p className="text-xs text-gray-400 italic font-medium">No valid attachment data located for this request.</p>
-              )}
+                  <p className="text-xs text-gray-400 italic font-medium">No valid attachment data located for this request.</p>
+                )}
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Premium Operator Pre-Save Confirmation Dialog */}
       {showSaveConfirmModal && (

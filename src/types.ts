@@ -26,4 +26,8 @@ export interface PFRFData {
   supervisorName: string;
   supervisorDate: string;
   approvedBy: string;
+  hasAttachment?: boolean;
+  attachmentName?: string | null;
+  attachmentData?: string | null;
+  attachments?: { name: string; data: string; type?: string }[];
 }

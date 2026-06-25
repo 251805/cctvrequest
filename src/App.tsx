@@ -93,8 +93,8 @@ function AppContent() {
               exit={{ opacity: 0, scale: 0.99 }}
             >
                <div className="mb-8">
-                <h1 className="text-3xl font-black text-blue-900 uppercase tracking-tight">System Dashboard</h1>
-                <p className="text-gray-500 font-medium tracking-tight">Managing real-time footage requests and operator assignments.</p>
+                <h1 className="text-3xl font-black text-blue-900 uppercase tracking-tight">Monitoring room Dashboard</h1>
+                <p className="text-gray-500 font-medium tracking-tight">CCTV Footage request manager</p>
               </div>
               <LiveQueue onSelect={setSelectedRequest} />
             </motion.div>
